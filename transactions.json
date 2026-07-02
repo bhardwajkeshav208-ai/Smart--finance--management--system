@@ -1,0 +1,47 @@
+[
+    {
+        "type": "Income",
+        "amount": 2000.0,
+        "date": "2026-7-8"
+    },
+    {
+        "type": "Expense",
+        "amount": 1000.0,
+        "category": "food",
+        "date": "2026-9-7"
+    },
+    {
+        "type": "Income",
+        "amount": 2000.0,
+        "date": "2025-9-8"
+    },
+    {
+        "type": "Expense",
+        "amount": 1000.0,
+        "category": "food",
+        "date": "2026-9-8"
+    },
+    {
+        "type": "Expense",
+        "amount": 2000.0,
+        "category": "food",
+        "date": "2026-5-7"
+    },
+    {
+        "type": "Expense",
+        "amount": 1000.0,
+        "category": "food",
+        "date": "2025-9-8"
+    },
+    {
+        "type": "Expense",
+        "amount": 1000.0,
+        "category": "travel",
+        "date": "2024-8-9"
+    },
+    {
+        "type": "Income",
+        "amount": 2111.0,
+        "date": "26-6-8"
+    }
+]
