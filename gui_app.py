@@ -17,6 +17,8 @@ import gui_theme as theme
 from tracker_oop import BudgetTracker
 import analytics
 from pdf_generator import PDFReportGenerator
+import ml_engine
+import gui_ai_view
 
 def clean_amount_str(val_str):
     if not val_str:
@@ -58,13 +60,20 @@ class ScrollableFrame(tk.Frame):
 class SmartBudgetTrackerApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Smart Finance Management System")
+        self.title("FINSIGHT - Smart Finance & Business Management System")
         self.geometry("1180x780")
         self.configure(bg=theme.BG_MAIN)
         self.resizable(True, True)
 
         # Initialize Finance Tracker OOP Controller
         self.tracker = BudgetTracker()
+
+        # Initialize Machine Learning NLP Categorizer
+        self.nlp_categorizer = ml_engine.ExpenseCategorizerNLP()
+        try:
+            self.nlp_categorizer.train_on_history(self.tracker.db.get_connection())
+        except Exception:
+            pass
 
         # Apply Styles
         theme.setup_ttk_styles()
@@ -97,6 +106,7 @@ class SmartBudgetTrackerApp(tk.Tk):
         self.pages["subscriptions"] = self.create_subscriptions_page()
         self.pages["suggestions"] = self.create_suggestions_page()
         self.pages["exports"] = self.create_exports_page()
+        self.pages["ai_insights"] = gui_ai_view.create_ai_insights_page(self)
         
         # Business Pages
         self.pages["biz_dashboard"] = self.create_biz_dashboard_page()
@@ -164,6 +174,8 @@ class SmartBudgetTrackerApp(tk.Tk):
             self.refresh_subscriptions()
         elif page_name == "exports":
             self.refresh_exports(df)
+        elif page_name == "ai_insights":
+            self.refresh_ai_insights()
         elif page_name.startswith("biz_"):
             self.refresh_biz_page(page_name)
 
@@ -487,7 +499,7 @@ class SmartBudgetTrackerApp(tk.Tk):
         main_layout.pack(fill="both", expand=True, padx=25, pady=5)
 
         # --- Left Panel: Transaction Input Form ---
-        form_card = theme.Card(main_layout, width=320, height=450)
+        form_card = theme.Card(main_layout, width=320, height=530)
         form_card.pack(side="left", fill="y", padx=(0, 15))
         form_card.pack_propagate(False)
 
@@ -522,6 +534,11 @@ class SmartBudgetTrackerApp(tk.Tk):
         tk.Label(form_card, text="Notes", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w", padx=20, pady=(5,0))
         self.tx_notes_entry = tk.Entry(form_card, font=theme.FONT_BODY, bg=theme.BG_MAIN, fg=theme.TEXT_PRIMARY, insertbackground="white", bd=1, relief="solid")
         self.tx_notes_entry.pack(pady=5, padx=20, fill="x")
+
+        # AI Auto-Categorize Indicator Label
+        self.tx_ai_lbl = tk.Label(form_card, text="🤖 AI: Type notes for auto-category", font=("Segoe UI", 9, "italic"), fg=theme.ACCENT, bg=theme.BG_CARD)
+        self.tx_ai_lbl.pack(anchor="w", padx=20, pady=(2, 0))
+        self.tx_notes_entry.bind("<KeyRelease>", self.on_tx_notes_change)
 
         # Buttons
         btn_frame = tk.Frame(form_card, bg=theme.BG_CARD)
@@ -663,9 +680,23 @@ class SmartBudgetTrackerApp(tk.Tk):
         self.tx_date_entry.delete(0, tk.END)
         self.tx_date_entry.insert(0, date.today().strftime("%Y-%m-%d"))
         self.tx_notes_entry.delete(0, tk.END)
+        if hasattr(self, 'tx_ai_lbl'):
+            self.tx_ai_lbl.config(text="🤖 AI: Type notes for auto-category", fg=theme.TEXT_MUTED)
         self.btn_submit_tx.configure(text="Save Record", bg=theme.ACCENT)
         self.btn_delete_tx.configure(state="disabled")
         self.tree.selection_remove(self.tree.selection())
+
+    def on_tx_notes_change(self, event=None):
+        text = self.tx_notes_entry.get().strip()
+        if len(text) >= 3 and hasattr(self, 'nlp_categorizer'):
+            pred_cat, conf = self.nlp_categorizer.predict(text)
+            if pred_cat and conf >= 40.0:
+                self.tx_cat_var.set(pred_cat)
+                self.tx_ai_lbl.config(text=f"🤖 AI Categorized: {pred_cat} ({conf}%)", fg=theme.ACCENT)
+            else:
+                self.tx_ai_lbl.config(text="🤖 AI: Analyzing...", fg=theme.TEXT_MUTED)
+        elif not text and hasattr(self, 'tx_ai_lbl'):
+            self.tx_ai_lbl.config(text="🤖 AI: Type notes for auto-category", fg=theme.TEXT_MUTED)
 
     def on_row_select(self, event):
         selection = self.tree.selection()
@@ -1171,46 +1202,47 @@ class SmartBudgetTrackerApp(tk.Tk):
     # --- SMART SHOPPING SUGGESTIONS ---
     # ==========================================
     def create_suggestions_page(self):
-        page = tk.Frame(self.content_container, bg=theme.BG_MAIN)
+        page = ScrollableFrame(self.content_container, bg_color=theme.BG_MAIN)
+        frame = page.scrollable_frame
 
         # Header
-        top_bar = tk.Frame(page, bg=theme.BG_MAIN)
+        top_bar = tk.Frame(frame, bg=theme.BG_MAIN)
         top_bar.pack(fill="x", padx=25, pady=20)
-        title = tk.Label(top_bar, text="Smart Shopping suggestions", font=theme.FONT_TITLE, fg=theme.TEXT_PRIMARY, bg=theme.BG_MAIN)
+        title = tk.Label(top_bar, text="Smart Shopping Suggestions", font=theme.FONT_TITLE, fg=theme.TEXT_PRIMARY, bg=theme.BG_MAIN)
         title.pack(side="left")
 
-        # Container
-        content_card = theme.Card(page, width=700, height=450)
-        content_card.pack(fill="both", expand=True, padx=25, pady=10)
+        # Search & Budget Input Card
+        search_card = tk.Frame(frame, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1)
+        search_card.pack(fill="x", padx=25, pady=(0, 15))
         
         info_lbl = tk.Label(
-            content_card, 
-            text="Thinking of buying something expensive? Enter details below to see if we can find a cheaper alternative\nand check how it affects your financial health score!", 
+            search_card, 
+            text="Thinking of buying something expensive? Enter your product and budget below to independently search and compare\nreal-time prices across Amazon India, Flipkart, Croma, and Reliance Digital without platform bias.", 
             font=theme.FONT_BODY, 
             fg=theme.TEXT_MUTED, 
             bg=theme.BG_CARD,
             justify="left"
         )
-        info_lbl.pack(pady=20, padx=25, anchor="w")
+        info_lbl.pack(pady=(15, 10), padx=20, anchor="w")
 
         # Inputs frame
-        input_frame = tk.Frame(content_card, bg=theme.BG_CARD)
-        input_frame.pack(fill="x", padx=25, pady=10)
+        input_frame = tk.Frame(search_card, bg=theme.BG_CARD)
+        input_frame.pack(fill="x", padx=20, pady=(0, 15))
 
         # Item Name
-        tk.Label(input_frame, text="Product Name / Keyword", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD).grid(row=0, column=0, sticky="w", pady=5)
-        self.suggest_name_entry = tk.Entry(input_frame, font=theme.FONT_BODY, bg=theme.BG_MAIN, fg=theme.TEXT_PRIMARY, insertbackground="white", bd=1, relief="solid", width=25)
-        self.suggest_name_entry.grid(row=1, column=0, sticky="w", pady=5, padx=(0,20))
+        tk.Label(input_frame, text="Product Name / Keyword", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        self.suggest_name_entry = tk.Entry(input_frame, font=theme.FONT_BODY, bg=theme.BG_MAIN, fg=theme.TEXT_PRIMARY, insertbackground="white", bd=1, relief="solid", width=32)
+        self.suggest_name_entry.grid(row=1, column=0, sticky="w", padx=(0, 15))
 
-        # Planned Price
-        tk.Label(input_frame, text="Store Listing Price (₹)", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD).grid(row=0, column=1, sticky="w", pady=5)
-        self.suggest_price_entry = tk.Entry(input_frame, font=theme.FONT_BODY, bg=theme.BG_MAIN, fg=theme.TEXT_PRIMARY, insertbackground="white", bd=1, relief="solid", width=20)
-        self.suggest_price_entry.grid(row=1, column=1, sticky="w", pady=5, padx=(0,20))
+        # Expected / Budget Price
+        tk.Label(input_frame, text="Expected Budget (₹)", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD).grid(row=0, column=1, sticky="w", pady=(0, 5))
+        self.suggest_price_entry = tk.Entry(input_frame, font=theme.FONT_BODY, bg=theme.BG_MAIN, fg=theme.TEXT_PRIMARY, insertbackground="white", bd=1, relief="solid", width=18)
+        self.suggest_price_entry.grid(row=1, column=1, sticky="w", padx=(0, 15))
 
         # Run Button
         btn_run = tk.Button(
             input_frame, 
-            text="🔍 Compare Prices", 
+            text="🔍 Compare 4 Platforms", 
             font=theme.FONT_BODY_BOLD, 
             bg=theme.ACCENT, 
             fg=theme.TEXT_DARK, 
@@ -1221,21 +1253,21 @@ class SmartBudgetTrackerApp(tk.Tk):
             cursor="hand2", 
             command=self.run_suggestions_engine
         )
-        btn_run.grid(row=1, column=2, sticky="sw")
+        btn_run.grid(row=1, column=2, sticky="w")
 
-        # Results area
-        self.suggest_results_frame = tk.Frame(content_card, bg=theme.BG_CARD)
-        self.suggest_results_frame.pack(fill="both", expand=True, padx=25, pady=20)
+        # Results area (expands vertically without height restriction)
+        self.suggest_results_frame = tk.Frame(frame, bg=theme.BG_MAIN)
+        self.suggest_results_frame.pack(fill="both", expand=True, padx=25, pady=(0, 25))
 
         # Welcome Placeholder
         self.suggest_placeholder = tk.Label(
             self.suggest_results_frame, 
-            text="Enter an item name (e.g. 'Laptop', 'iPhone 15', 'Nike Shoes')\nand pricing above to launch the assistant engine.",
+            text="Enter a product name (e.g. 'iPhone 15', 'Samsung S24', 'LG TV 32 inch')\nand your expected budget above to search all four platforms.",
             font=theme.FONT_BODY, 
             fg="#4b5563", 
-            bg=theme.BG_CARD
+            bg=theme.BG_MAIN
         )
-        self.suggest_placeholder.pack(expand=True)
+        self.suggest_placeholder.pack(expand=True, pady=40)
 
         return page
 
@@ -1244,422 +1276,426 @@ class SmartBudgetTrackerApp(tk.Tk):
         price_str = clean_amount_str(self.suggest_price_entry.get())
 
         if not item_keyword or not price_str:
-            messagebox.showerror("Error", "Please fill in both fields.")
+            messagebox.showerror("Error", "Please fill in both product name and budget price.")
             return
 
         try:
-            price = float(price_str)
-            if price <= 0:
+            user_budget = float(price_str)
+            if user_budget <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Please enter a valid positive number for price.")
+            messagebox.showerror("Error", "Please enter a valid positive number for budget price.")
             return
 
         # Clear results panel
         for child in self.suggest_results_frame.winfo_children():
             child.destroy()
 
-        # Show Loading Spinner / Label
-        loading_lbl = tk.Label(
-            self.suggest_results_frame,
-            text="🔍 Searching online stores (Amazon, Flipkart, Croma)...\nComparing prices in real-time. Please wait...",
+        # Show Loading Spinner / Status
+        loading_box = tk.Frame(self.suggest_results_frame, bg=theme.BG_CARD)
+        loading_box.pack(expand=True, fill="both", pady=30)
+        
+        tk.Label(
+            loading_box,
+            text="🔍 Searching 4 E-Commerce Platforms...\n"
+                 "• Amazon India   • Flipkart   • Croma   • Reliance Digital\n\n"
+                 "Fetching real-time product listings and verifying prices. Please wait...",
             font=theme.FONT_BODY_BOLD,
             fg=theme.ACCENT,
-            bg=theme.BG_CARD
-        )
-        loading_lbl.pack(expand=True)
+            bg=theme.BG_CARD,
+            justify="center"
+        ).pack(expand=True)
         
         # Start search in background thread
         import threading
         def bg_search():
             try:
-                results = self.perform_live_price_comparison(item_keyword, price)
-                self.after(10, lambda: self.display_suggestions_results(item_keyword, price, results))
+                from price_comparison_service import search_all_platforms, evaluate_price_comparison
+                offers = search_all_platforms(item_keyword)
+                comp_result = evaluate_price_comparison(offers, user_budget)
+                self.after(10, lambda: self.display_suggestions_results(item_keyword, user_budget, comp_result))
             except Exception as e:
                 print("Suggestions search thread error:", e)
-                self.after(10, lambda: self.display_suggestions_error())
+                self.after(10, lambda: self.display_suggestions_error(str(e)))
 
         threading.Thread(target=bg_search, daemon=True).start()
 
-    def perform_live_price_comparison(self, query, target_price):
-        import urllib.request
-        import urllib.parse
-        import re
-        import random
-        
-        results = []
-        clean_q = query.strip()
-        
-        try:
-            # Query DuckDuckGo HTML shopping results
-            search_query = f"{clean_q} price site:amazon.in OR site:flipkart.com OR site:croma.com"
-            url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(search_query)
-            
-            req = urllib.request.Request(
-                url,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36'}
-            )
-            
-            with urllib.request.urlopen(req, timeout=4) as response:
-                html = response.read().decode('utf-8')
-                blocks = re.findall(r'<div class="result body[^"]*">(.*?)</div>\s*</div>', html, re.DOTALL)
-                
-                for block in blocks:
-                    url_match = re.search(r'href="([^"]+)"', block)
-                    title_match = re.search(r'class="result__title"[^>]*>\s*<a[^>]*>(.*?)</a>', block, re.DOTALL)
-                    snippet_match = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
-                    
-                    if url_match and title_match:
-                        item_url = urllib.parse.unquote(url_match.group(1))
-                        if "/l/?" in item_url:
-                            parsed_url = urllib.parse.urlparse(item_url)
-                            query_params = urllib.parse.parse_qs(parsed_url.query)
-                            if "uddg" in query_params:
-                                item_url = query_params["uddg"][0]
-                                
-                        item_title = re.sub('<[^<]+?>', '', title_match.group(1)).strip()
-                        item_snippet = re.sub('<[^<]+?>', '', snippet_match.group(1)).strip() if snippet_match else ""
-                        
-                        # Store name mapping
-                        store = "Other Retailer"
-                        if "amazon.in" in item_url:
-                            store = "Amazon India"
-                        elif "flipkart.com" in item_url:
-                            store = "Flipkart"
-                        elif "croma.com" in item_url:
-                            store = "Croma"
-                        elif "reliancedigital.in" in item_url:
-                            store = "Reliance Digital"
-                        else:
-                            continue
-                            
-                        # Extract price
-                        price = None
-                        price_matches = re.findall(r'(?:Rs\.?|₹)\s*(\d{1,3}(?:,\d{3})+|\d+)', item_title + " " + item_snippet)
-                        if price_matches:
-                            p_str = price_matches[0].replace(",", "")
-                            try:
-                                price = float(p_str)
-                            except ValueError:
-                                pass
-                                
-                        if price and price > 100:
-                            # Heuristic: filter out accessory prices (like covers/cases/chargers)
-                            # which are typically less than 40% of the item listing price,
-                            # and filter out unrelated extreme listings (e.g. 3x user's price)
-                            if price < target_price * 0.4 or price > target_price * 3.0:
-                                continue
-                                
-                            results.append({
-                                "store": store,
-                                "title": item_title[:70] + "...",
-                                "price": price,
-                                "url": item_url
-                            })
-        except Exception as e:
-            print("Live compare search error:", e)
 
-        # Sort by price ascending
-        results.sort(key=lambda x: x["price"])
-        
-        # Fallback heuristic pricing database if DDG results are empty or incomplete
-        if len(results) < 2:
-            # Generate realistic online prices scaled precisely to user's target price
-            # This guarantees that we get highly accurate, non-fake comparisons
-            stores_config = [
-                ("Amazon India", "https://www.amazon.in/s?k=", 0.98),
-                ("Flipkart", "https://www.flipkart.com/search?q=", 0.96),
-                ("Croma", "https://www.croma.com/search/?text=", 1.02),
-                ("Reliance Digital", "https://www.reliancedigital.in/search?q=", 1.04)
-            ]
-            
-            specific_name = self.map_generic_to_specific_product(query, target_price)
-            
-            results = []
-            for name, base_url, multiplier in stores_config:
-                # Add small random fluctuation (-0.5% to +0.5%)
-                fluctuation = random.uniform(0.995, 1.005)
-                final_price = round(target_price * multiplier * fluctuation, -2)
-                
-                # Dynamic price filter parameters in search URLs
-                min_f = int(final_price * 0.92)
-                max_f = int(final_price * 1.08)
-                
-                if name == "Amazon India":
-                    url = f"https://www.amazon.in/s?k={urllib.parse.quote(specific_name)}&rh=p_36%3A{min_f}00-{max_f}00"
-                elif name == "Flipkart":
-                    url = f"https://www.flipkart.com/search?q={urllib.parse.quote(specific_name)}&p[]=facets.price_range.from%3D{min_f}&p[]=facets.price_range.to%3D{max_f}"
-                elif name == "Reliance Digital":
-                    url = f"https://www.reliancedigital.in/search?q={urllib.parse.quote(specific_name)}%3Arelevance%3Aprice%3B{min_f}%3B{max_f}"
-                else: # Croma
-                    url = base_url + urllib.parse.quote(specific_name)
-                    
-                results.append({
-                    "store": name,
-                    "title": specific_name,
-                    "price": final_price,
-                    "url": url
-                })
-                
-            results.sort(key=lambda x: x["price"])
-            
-        return results
-
-    def get_filtered_store_url(self, store_name, product_name, price):
-        import urllib.parse
-        clean_name = product_name.replace("...", "").strip()
-        
-        # We search the store for the specific product name and sort by price ascending
-        # to ensure the product ALWAYS shows up and the user gets a successful result list.
-        if "Amazon" in store_name:
-            return f"https://www.amazon.in/s?k={urllib.parse.quote(clean_name)}&s=price-asc-rank"
-        elif "Flipkart" in store_name:
-            return f"https://www.flipkart.com/search?q={urllib.parse.quote(clean_name)}&sort=price_asc"
-        elif "Reliance" in store_name:
-            return f"https://www.reliancedigital.in/search?q={urllib.parse.quote(clean_name)}"
-        else: # Croma
-            return f"https://www.croma.com/search/?text={urllib.parse.quote(clean_name)}"
-
-    def display_suggestions_results(self, item_keyword, target_price, results):
+    def display_suggestions_results(self, item_keyword, user_budget, comp_res):
         import webbrowser
         
         # Clear results panel
         for child in self.suggest_results_frame.winfo_children():
             child.destroy()
             
-        if not results:
-            self.display_suggestions_error()
+        if not comp_res or not comp_res.offers:
+            self.display_suggestions_error("No product offers could be retrieved.")
             return
 
-        results_panel = tk.Frame(self.suggest_results_frame, bg=theme.BG_CARD)
+        results_panel = tk.Frame(self.suggest_results_frame, bg=theme.BG_MAIN)
         results_panel.pack(fill="both", expand=True)
 
-        # 1. High-Value Warning Alert
-        if target_price >= 5000:
-            warning_box = tk.Frame(results_panel, bg="#450a0a", highlightbackground=theme.EXPENSE, highlightthickness=1)
-            warning_box.pack(fill="x", pady=(0, 12))
-            
-            tk.Label(
-                warning_box, 
-                text="⚠️ HIGH-VALUE WARNING", 
-                font=theme.FONT_BODY_BOLD, 
-                fg=theme.EXPENSE, 
-                bg="#450a0a"
-            ).pack(anchor="w", padx=15, pady=(8,2))
-            
-            warning_text = f"This item costs ₹{target_price:,.2f}, which is above the ₹5,000 smart spending limit. We advise waiting 48 hours before purchasing to prevent impulse buying."
-            tk.Label(
-                warning_box, 
-                text=warning_text, 
-                font=theme.FONT_SMALL, 
-                fg=theme.TEXT_PRIMARY, 
-                bg="#450a0a", 
-                justify="left", 
-                wraplength=620
-            ).pack(anchor="w", padx=15, pady=(2,8))
+        # -------------------------------------------------------------
+        # 1. TOP METRIC BADGES (User Budget, Lowest Price, Best Deal, Variance)
+        # -------------------------------------------------------------
+        metrics_frame = tk.Frame(results_panel, bg=theme.BG_MAIN)
+        metrics_frame.pack(fill="x", pady=(0, 12))
+        for i in range(4):
+            metrics_frame.columnconfigure(i, weight=1)
 
-        # 2. Main Analytics Box
-        info_box = tk.Frame(results_panel, bg=theme.BG_MAIN, highlightbackground=theme.BORDER, highlightthickness=1)
-        info_box.pack(fill="both", expand=True)
+        # Card 1: User Budget
+        c1 = tk.Frame(metrics_frame, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1, padx=14, pady=10)
+        c1.grid(row=0, column=0, sticky="nsew", padx=4)
+        tk.Label(c1, text="YOUR BUDGET", font=theme.FONT_SMALL, fg=theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w")
+        tk.Label(c1, text=f"₹{user_budget:,.2f}", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD).pack(anchor="w", pady=(3, 0))
 
-        # Cheapest Match
-        cheapest_deal = results[0]
-        store_name = cheapest_deal["store"]
-        cheapest_price = cheapest_deal["price"]
-        cheapest_url = cheapest_deal["url"]
-        
-        # Create Split Columns for Deal & Price Comparison
-        split_frame = tk.Frame(info_box, bg=theme.BG_MAIN)
-        split_frame.pack(fill="both", expand=True, padx=15, pady=15)
-        split_frame.columnconfigure(0, weight=1)
-        split_frame.columnconfigure(1, weight=1)
+        # Card 2: Lowest Verified Price
+        c2 = tk.Frame(metrics_frame, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1, padx=14, pady=10)
+        c2.grid(row=0, column=1, sticky="nsew", padx=4)
+        tk.Label(c2, text="LOWEST VERIFIED", font=theme.FONT_SMALL, fg=theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w")
+        lowest_txt = f"₹{comp_res.lowest_verified_price:,.2f}" if comp_res.lowest_verified_price else "Unavailable"
+        lowest_color = theme.INCOME if comp_res.lowest_verified_price else theme.TEXT_MUTED
+        tk.Label(c2, text=lowest_txt, font=theme.FONT_BODY_BOLD, fg=lowest_color, bg=theme.BG_CARD).pack(anchor="w", pady=(3, 0))
 
-        # Left Column - Best Deal summary & Actionable Strategies
-        left_col = tk.Frame(split_frame, bg=theme.BG_MAIN)
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-
-        if cheapest_price < target_price:
-            # Case A: Cheaper Price is Found Online!
-            savings = target_price - cheapest_price
-            savings_pct = (savings / target_price) * 100
-            
-            tk.Label(left_col, text="🚨 Warning: Cheaper Deal Available!", font=theme.FONT_SUBTITLE, fg=theme.EXPENSE, bg=theme.BG_MAIN).pack(anchor="w", pady=(0, 5))
-            
-            msg = f"Do not buy at your listing price! We found this product online at {store_name} for ₹{cheapest_price:,.2f}."
-            tk.Label(left_col, text=msg, font=theme.FONT_BODY, fg=theme.TEXT_PRIMARY, bg=theme.BG_MAIN, wraplength=320, justify="left").pack(anchor="w", pady=2)
-            
-            sav_lbl = tk.Label(left_col, text=f"Estimated Savings: ₹{savings:,.2f} ({savings_pct:.1f}% saved)", font=theme.FONT_BODY_BOLD, fg=theme.INCOME, bg=theme.BG_MAIN)
-            sav_lbl.pack(anchor="w", pady=2)
-
-            score_boost = int(min(15, max(1, savings / 1000)))
-            impact_text = f"💡 Financial Health Impact:\nOrdering online instead will increase your projected Health Score by roughly +{score_boost} points next month!"
-            tk.Label(left_col, text=impact_text, font=theme.FONT_SMALL, fg=theme.WARNING, bg=theme.BG_MAIN, justify="left").pack(anchor="w", pady=8)
-            
-            # View Deal Button - Open specific filtered URL
-            btn_buy = tk.Button(
-                left_col,
-                text=f"🔗 Go to Cheapest Deal ({store_name})",
-                font=theme.FONT_SMALL,
-                bg=theme.ACCENT,
-                fg=theme.TEXT_DARK,
-                activebackground=theme.ACCENT,
-                bd=0,
-                padx=12,
-                pady=8,
-                cursor="hand2",
-                command=lambda: webbrowser.open(self.get_filtered_store_url(store_name, cheapest_deal["title"], cheapest_price))
-            )
-            btn_buy.pack(anchor="w", pady=10)
-
+        # Card 3: Cheapest Platform
+        c3 = tk.Frame(metrics_frame, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1, padx=14, pady=10)
+        c3.grid(row=0, column=2, sticky="nsew", padx=4)
+        tk.Label(c3, text="CHEAPEST STORE", font=theme.FONT_SMALL, fg=theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w")
+        if comp_res.has_tie:
+            best_platform_name = "🤝 " + " & ".join([o.platform for o in comp_res.cheapest_offers])
+        elif comp_res.cheapest_offers:
+            best_platform_name = "👑 " + comp_res.cheapest_offers[0].platform
         else:
-            # Case B: Online Price is NOT Cheaper! (Your listing is the best price)
-            tk.Label(left_col, text="❌ No Cheaper Deals Available!", font=theme.FONT_SUBTITLE, fg=theme.WARNING, bg=theme.BG_MAIN).pack(anchor="w", pady=(0, 5))
-            
-            msg = f"Your listing price of ₹{target_price:,.2f} is currently the best available deal. We checked online stores and no one offers a lower price than yours."
-            tk.Label(left_col, text=msg, font=theme.FONT_BODY, fg=theme.TEXT_PRIMARY, bg=theme.BG_MAIN, wraplength=320, justify="left").pack(anchor="w", pady=2)
-            
-            tk.Label(left_col, text="Your deal is the best! We recommend purchasing from your local or current store.", font=theme.FONT_BODY_BOLD, fg=theme.INCOME, bg=theme.BG_MAIN, wraplength=320, justify="left").pack(anchor="w", pady=5)
+            best_platform_name = "None Verified"
+        tk.Label(c3, text=best_platform_name, font=theme.FONT_BODY_BOLD, fg=theme.ACCENT if comp_res.cheapest_offers else theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w", pady=(3, 0))
 
-        # Right Column - Price List Table
-        right_col = tk.Frame(split_frame, bg=theme.BG_MAIN)
-        right_col.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        # Card 4: Budget Variance / Savings
+        c4 = tk.Frame(metrics_frame, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1, padx=14, pady=10)
+        c4.grid(row=0, column=3, sticky="nsew", padx=4)
+        tk.Label(c4, text="BUDGET VARIANCE", font=theme.FONT_SMALL, fg=theme.TEXT_MUTED, bg=theme.BG_CARD).pack(anchor="w")
+        if comp_res.lowest_verified_price is not None:
+            diff = comp_res.lowest_verified_price - user_budget
+            if diff <= 0:
+                var_txt = f"Saved: ₹{abs(diff):,.2f}"
+                var_color = theme.INCOME
+            else:
+                var_txt = f"Over: +₹{diff:,.2f}"
+                var_color = theme.EXPENSE
+        else:
+            var_txt = "Unverified"
+            var_color = theme.TEXT_MUTED
+        tk.Label(c4, text=var_txt, font=theme.FONT_BODY_BOLD, fg=var_color, bg=theme.BG_CARD).pack(anchor="w", pady=(3, 0))
 
-        tk.Label(right_col, text="📊 Real-Time Stores Comparison", font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=theme.BG_MAIN).pack(anchor="w", pady=(0, 5))
+        # -------------------------------------------------------------
+        # 2. PROMINENT "VISIT CHEAPEST DEAL" HERO BANNER
+        # -------------------------------------------------------------
+        cheapest_banner = tk.Frame(results_panel, bg="#13262f", highlightbackground=theme.ACCENT, highlightthickness=1)
+        cheapest_banner.pack(fill="x", pady=(0, 12))
 
-        # Create Treeview inside right column to list all prices
-        scroll_y = ttk.Scrollbar(right_col, orient="vertical")
-        columns = ("store", "price")
-        tree = ttk.Treeview(
-            right_col, 
-            columns=columns, 
-            show="headings", 
-            yscrollcommand=scroll_y.set,
-            style="Custom.Treeview",
-            height=5
+        cb_info = tk.Frame(cheapest_banner, bg="#13262f")
+        cb_info.pack(side="left", padx=16, pady=12, fill="x", expand=True)
+
+        if comp_res.lowest_verified_price is not None and comp_res.cheapest_offers:
+            deal_store_txt = ("Tied: " if comp_res.has_tie else "") + ", ".join(o.platform for o in comp_res.cheapest_offers)
+            diff = comp_res.lowest_verified_price - user_budget
+            if diff <= 0:
+                stat_tag = f"✅ ₹{abs(diff):,.2f} Below Budget"
+            else:
+                stat_tag = f"⚠️ ₹{diff:,.2f} Above Budget (Cheapest Available)"
+            cb_title = f"👑 BEST VERIFIED DEAL: {deal_store_txt} — ₹{comp_res.lowest_verified_price:,.2f}"
+            cb_sub = f"Status: {stat_tag}   •   Last Checked: {comp_res.checked_time}"
+        else:
+            cb_title = "⚠️ No Verified Platform Offer Available"
+            cb_sub = "Prices could not be verified live. Check individual platform statuses below."
+
+        tk.Label(cb_info, text=cb_title, font=theme.FONT_SUBTITLE, fg=theme.ACCENT, bg="#13262f").pack(anchor="w")
+        tk.Label(cb_info, text=cb_sub, font=theme.FONT_BODY, fg=theme.TEXT_PRIMARY, bg="#13262f").pack(anchor="w", pady=(2, 0))
+
+        def open_cheapest_deal():
+            if not comp_res.cheapest_offers or comp_res.lowest_verified_price is None:
+                messagebox.showinfo(
+                    "Cheapest Deal Unavailable",
+                    "No verified product listing is currently available. Please check the individual platform verification status in the table below."
+                )
+                return
+            best_offer = comp_res.cheapest_offers[0]
+            url = (best_offer.url or "").strip()
+            if not url or not (url.startswith("http://") or url.startswith("https://")):
+                messagebox.showwarning(
+                    "Listing Link Unavailable",
+                    f"A direct product link for {best_offer.platform} could not be found."
+                )
+                return
+            webbrowser.open(url)
+
+        btn_cheapest_cta = tk.Button(
+            cheapest_banner,
+            text="🛒 Visit Cheapest Deal",
+            font=theme.FONT_BODY_BOLD,
+            bg=theme.ACCENT,
+            fg=theme.TEXT_DARK,
+            activebackground="#5df5ff",
+            activeforeground=theme.TEXT_DARK,
+            bd=0,
+            padx=20,
+            pady=10,
+            cursor="hand2",
+            command=open_cheapest_deal
         )
-        scroll_y.config(command=tree.yview)
-        scroll_y.pack(side="right", fill="y")
-        
-        tree.heading("store", text="Store")
-        tree.heading("price", text="Price")
-        tree.column("store", width=140, anchor="w")
-        tree.column("price", width=100, anchor="e")
-        
-        for item in results:
-            tree.insert("", "end", values=(item["store"], f"₹{item['price']:,.2f}"))
-            
-        tree.pack(fill="both", expand=True)
+        btn_cheapest_cta.pack(side="right", padx=16, pady=12)
 
-        def on_tree_double_click(event):
-            selected = tree.focus()
-            if selected:
-                vals = tree.item(selected, "values")
-                s_name = vals[0]
-                for r in results:
-                    if r["store"] == s_name:
-                        # Open specific filtered URL
-                        webbrowser.open(self.get_filtered_store_url(r["store"], r["title"], r["price"]))
-                        break
-                        
-        tree.bind("<Double-1>", on_tree_double_click)
+        # -------------------------------------------------------------
+        # 3. DYNAMIC CASE BANNER & STATUS
+        # -------------------------------------------------------------
+        if comp_res.case == "A":
+            banner_bg = "#064e3b"
+            banner_border = theme.INCOME
+            banner_title = "🎉 VERIFIED DEAL AVAILABLE BELOW BUDGET!"
+            banner_title_color = theme.INCOME
+        elif comp_res.case == "B":
+            banner_bg = "#451a03"
+            banner_border = theme.WARNING
+            banner_title = "ℹ️ ALL AVAILABLE OFFERS EXCEED YOUR BUDGET"
+            banner_title_color = theme.WARNING
+        else:
+            banner_bg = "#1e293b"
+            banner_border = theme.ACCENT
+            banner_title = "⚠️ SEARCH & VERIFICATION STATUS"
+            banner_title_color = theme.ACCENT
 
-    def display_suggestions_error(self):
+        alert_box = tk.Frame(results_panel, bg=banner_bg, highlightbackground=banner_border, highlightthickness=1)
+        alert_box.pack(fill="x", pady=(0, 12))
+
+        tk.Label(
+            alert_box,
+            text=banner_title,
+            font=theme.FONT_BODY_BOLD,
+            fg=banner_title_color,
+            bg=banner_bg
+        ).pack(anchor="w", padx=15, pady=(8, 2))
+
+        tk.Label(
+            alert_box,
+            text=comp_res.summary_message,
+            font=theme.FONT_BODY,
+            fg=theme.TEXT_PRIMARY,
+            bg=banner_bg,
+            justify="left",
+            wraplength=720
+        ).pack(anchor="w", padx=15, pady=(2, 6))
+
+        if comp_res.health_score_impact > 0:
+            savings_amt = user_budget - comp_res.lowest_verified_price
+            tk.Label(
+                alert_box,
+                text=f"💡 Financial Health Impact: Saving ₹{savings_amt:,.2f} will increase your projected Financial Health Score by roughly +{comp_res.health_score_impact} pts next month!",
+                font=theme.FONT_SMALL,
+                fg=theme.INCOME,
+                bg=banner_bg,
+                justify="left"
+            ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        # -------------------------------------------------------------
+        # 4. FOUR-PLATFORM COMPARISON TABLE (Expansive, Taller, Responsive)
+        # -------------------------------------------------------------
+        table_container = tk.Frame(results_panel, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1)
+        table_container.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Table Header
+        header_frame = tk.Frame(table_container, bg=theme.BG_SIDEBAR)
+        header_frame.pack(fill="x")
+        header_frame.columnconfigure(0, weight=2, minsize=140)
+        header_frame.columnconfigure(1, weight=5, minsize=260)
+        header_frame.columnconfigure(2, weight=2, minsize=120)
+        header_frame.columnconfigure(3, weight=2, minsize=140)
+        header_frame.columnconfigure(4, weight=2, minsize=140)
+        header_frame.columnconfigure(5, weight=1, minsize=110)
+
+        headers = [
+            ("Platform", 0, "w"),
+            ("Product Listing / Variant", 1, "w"),
+            ("Listed Price", 2, "e"),
+            ("Budget Status", 3, "center"),
+            ("Verification Status", 4, "center"),
+            ("Action", 5, "center")
+        ]
+
+        for col_name, col_idx, col_anchor in headers:
+            lbl = tk.Label(
+                header_frame,
+                text=col_name,
+                font=theme.FONT_BODY_BOLD,
+                fg=theme.TEXT_PRIMARY,
+                bg=theme.BG_SIDEBAR,
+                anchor=col_anchor
+            )
+            lbl.grid(row=0, column=col_idx, sticky="ew", padx=10, pady=10)
+
+        # Cheaper offer platform names for quick identification
+        cheapest_platform_names = {o.platform for o in comp_res.cheapest_offers} if comp_res.lowest_verified_price else set()
+
+        for idx, offer in enumerate(comp_res.offers):
+            is_best = (offer.platform in cheapest_platform_names) and offer.is_verified
+            row_bg = "#192231" if is_best else (theme.BG_CARD if idx % 2 == 0 else "#14151a")
+            border_color = theme.ACCENT if is_best else theme.BORDER
+            thickness = 2 if is_best else 1
+
+            row_frame = tk.Frame(table_container, bg=row_bg, highlightbackground=border_color, highlightthickness=thickness)
+            row_frame.pack(fill="x", padx=4, pady=3)
+            row_frame.columnconfigure(0, weight=2, minsize=140)
+            row_frame.columnconfigure(1, weight=5, minsize=260)
+            row_frame.columnconfigure(2, weight=2, minsize=120)
+            row_frame.columnconfigure(3, weight=2, minsize=140)
+            row_frame.columnconfigure(4, weight=2, minsize=140)
+            row_frame.columnconfigure(5, weight=1, minsize=110)
+
+            # 1. Platform Cell
+            plat_cell = tk.Frame(row_frame, bg=row_bg)
+            plat_cell.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+            if is_best:
+                badge_text = "🤝 TIE DEAL" if comp_res.has_tie else "👑 BEST DEAL"
+                tk.Label(plat_cell, text=badge_text, font=("Segoe UI", 8, "bold"), fg=theme.ACCENT, bg=row_bg, anchor="w").pack(anchor="w")
+                tk.Label(plat_cell, text=offer.platform, font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=row_bg, anchor="w").pack(anchor="w")
+            else:
+                tk.Label(plat_cell, text=offer.platform, font=theme.FONT_BODY_BOLD, fg=theme.TEXT_PRIMARY, bg=row_bg, anchor="w").pack(anchor="w", pady=(8, 0))
+
+            # 2. Product Name & Variant Cell
+            prod_cell = tk.Frame(row_frame, bg=row_bg)
+            prod_cell.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+
+            clean_title = offer.product_name
+            if len(clean_title) > 65:
+                clean_title = clean_title[:62] + "..."
+            tk.Label(prod_cell, text=clean_title, font=theme.FONT_BODY, fg=theme.TEXT_PRIMARY, bg=row_bg, anchor="w", wraplength=280, justify="left").pack(anchor="w")
+            if offer.variant and offer.variant != "Standard":
+                tk.Label(prod_cell, text=f"Model/Variant: {offer.variant}", font=theme.FONT_SMALL, fg=theme.TEXT_MUTED, bg=row_bg, anchor="w").pack(anchor="w", pady=(2, 0))
+
+            # 3. Listed Price Cell
+            price_cell = tk.Frame(row_frame, bg=row_bg)
+            price_cell.grid(row=0, column=2, sticky="nsew", padx=10, pady=10)
+
+            if offer.price is not None:
+                pr_text = f"₹{offer.price:,.2f}"
+                pr_color = theme.INCOME if is_best else theme.TEXT_PRIMARY
+                pr_font = ("Segoe UI", 11, "bold") if is_best else theme.FONT_BODY_BOLD
+            else:
+                pr_text = "Price unavailable"
+                pr_color = theme.TEXT_MUTED
+                pr_font = theme.FONT_BODY
+            tk.Label(price_cell, text=pr_text, font=pr_font, fg=pr_color, bg=row_bg, anchor="e").pack(fill="x", pady=(8, 0))
+
+            # 4. Budget Status Cell
+            b_cell = tk.Frame(row_frame, bg=row_bg)
+            b_cell.grid(row=0, column=3, sticky="nsew", padx=10, pady=10)
+
+            if "Under Budget" in offer.budget_status:
+                bs_color = theme.INCOME
+            elif "Over Budget" in offer.budget_status:
+                bs_color = theme.EXPENSE
+            else:
+                bs_color = theme.TEXT_MUTED
+            tk.Label(b_cell, text=offer.budget_status, font=theme.FONT_BODY_BOLD if is_best else theme.FONT_BODY, fg=bs_color, bg=row_bg, anchor="center").pack(fill="x", pady=(8, 0))
+
+            # 5. Verification Status Cell
+            v_cell = tk.Frame(row_frame, bg=row_bg)
+            v_cell.grid(row=0, column=4, sticky="nsew", padx=10, pady=10)
+
+            if offer.is_verified:
+                v_text = "✅ Verified Live"
+                v_color = theme.INCOME
+            else:
+                v_text = "⚠️ " + (offer.status.split("(")[0].strip() if "(" in offer.status else offer.status)
+                v_color = theme.TEXT_MUTED
+            tk.Label(v_cell, text=v_text, font=theme.FONT_SMALL, fg=v_color, bg=row_bg, anchor="center").pack(fill="x", pady=(8, 0))
+
+            # 6. Action: Individual View Deal Button
+            btn_cell = tk.Frame(row_frame, bg=row_bg)
+            btn_cell.grid(row=0, column=5, sticky="nsew", padx=10, pady=10)
+
+            def make_open_offer_handler(target_url, plat_name):
+                def _open():
+                    url = (target_url or "").strip()
+                    if not url or not (url.startswith("http://") or url.startswith("https://")):
+                        messagebox.showwarning(
+                            "Listing Unavailable",
+                            f"Direct product listing URL for {plat_name} is not available."
+                        )
+                        return
+                    webbrowser.open(url)
+                return _open
+
+            btn_deal = tk.Button(
+                btn_cell,
+                text="🔗 View Deal",
+                font=theme.FONT_SMALL,
+                bg=theme.ACCENT if is_best else "#2e3039",
+                fg=theme.TEXT_DARK if is_best else theme.TEXT_PRIMARY,
+                activebackground=theme.ACCENT,
+                activeforeground=theme.TEXT_DARK,
+                bd=0,
+                padx=10,
+                pady=5,
+                cursor="hand2",
+                command=make_open_offer_handler(offer.url, offer.platform)
+            )
+            btn_deal.pack(anchor="center", pady=(6, 0))
+
+        # Table Footer Tip & Verification Info
+        footer_frame = tk.Frame(results_panel, bg=theme.BG_MAIN)
+        footer_frame.pack(fill="x", pady=(6, 12))
+
+        tk.Label(
+            footer_frame,
+            text=f"🕒 Last Checked: {comp_res.checked_time}   |   🛡️ Search Status: {comp_res.verified_count} of {comp_res.total_count} platforms verified live   |   💡 Tip: Click 'View Deal' on any row or 'Visit Cheapest Deal' to open exact listings.",
+            font=theme.FONT_SMALL,
+            fg=theme.TEXT_MUTED,
+            bg=theme.BG_MAIN
+        ).pack(anchor="w")
+
+
+    def display_suggestions_error(self, err_details=""):
         for child in self.suggest_results_frame.winfo_children():
             child.destroy()
-        tk.Label(
-            self.suggest_results_frame,
-            text="⚠️ Price Comparison Failed\n\nCould not fetch real-time search results. Please check your network connection and try again.",
-            font=theme.FONT_BODY,
-            fg=theme.EXPENSE,
-            bg=theme.BG_CARD
-        ).pack(expand=True)
-
-    def map_generic_to_specific_product(self, query, price):
-        q_lower = query.lower().strip()
-        
-        # Check if the query already contains a brand or a specific model name.
-        # If so, we preserve the user's specific query instead of overriding it.
-        brand_keywords = [
-            "apple", "macbook", "iphone", "ipad", "airpods", "sony", "boat", "jbl", "samsung", "oneplus", 
-            "redmi", "xiaomi", "realme", "fastrack", "titan", "casio", "fossil", "daniel wellington", 
-            "noise", "fire-boltt", "boat", "hp", "dell", "lenovo", "asus", "acer", "lg"
-        ]
-        has_brand = any(brand in q_lower for brand in brand_keywords)
-        word_count = len(q_lower.split())
-        
-        if has_brand or word_count >= 3:
-            return query.title()
             
-        # Defaults
-        name = f"{query.title()} Standard Model"
+        err_card = tk.Frame(self.suggest_results_frame, bg=theme.BG_MAIN, highlightbackground=theme.EXPENSE, highlightthickness=1, padx=20, pady=20)
+        err_card.pack(fill="both", expand=True, pady=10)
         
-        # 1. Laptop mapping
-        if "laptop" in q_lower or "computer" in q_lower:
-            if price >= 80000:
-                name = "Apple MacBook Air M1 (8GB RAM, 256GB SSD)"
-            elif price >= 50000:
-                name = "ASUS Vivobook 16 Intel Core i5 (16GB RAM, 512GB SSD)"
-            elif price >= 35000:
-                name = "HP 15s AMD Ryzen 5 (8GB RAM, 512GB SSD)"
-            else:
-                name = "Lenovo IdeaPad Slim 1 AMD Athlon (8GB RAM, 256GB SSD)"
-                
-        # 2. iPhone mapping
-        elif "iphone" in q_lower:
-            if price >= 130000:
-                name = "Apple iPhone 15 Pro Max (256GB)"
-            elif price >= 110000:
-                name = "Apple iPhone 15 Pro (128GB)"
-            elif price >= 70000:
-                name = "Apple iPhone 15 (128GB)"
-            elif price >= 55000:
-                name = "Apple iPhone 14 (128GB)"
-            else:
-                name = "Apple iPhone 13 (128GB)"
-                
-        # 3. Generic phone mapping
-        elif "phone" in q_lower or "mobile" in q_lower or "smartphone" in q_lower:
-            if price >= 100000:
-                name = "Samsung Galaxy S24 Ultra (256GB)"
-            elif price >= 65000:
-                name = "Samsung Galaxy S24 (128GB)"
-            elif price >= 55000:
-                name = "OnePlus 12 (256GB)"
-            elif price >= 25000:
-                name = "OnePlus Nord CE4 (128GB)"
-            else:
-                name = "Redmi 13C 5G (128GB)"
-                
-        # 4. Headphones mapping
-        elif "headphone" in q_lower or "headphones" in q_lower or "earphones" in q_lower or "earbuds" in q_lower:
-            if price >= 25000:
-                name = "Sony WH-1000XM5 Wireless Noise Cancelling Headphones"
-            elif price >= 15000:
-                name = "Sony WH-1000XM4 Wireless Noise Cancelling Headphones"
-            elif price >= 8000:
-                name = "Sony WH-CH720N Wireless Over-Ear Headphones"
-            else:
-                name = "boAt Rockerz 550 Over-Ear Wireless Headphones"
-                
-        # 5. Television / TV mapping
-        elif "tv" in q_lower or "television" in q_lower or "smart tv" in q_lower:
-            if price >= 50000:
-                name = "Sony Bravia 55 inches 4K Ultra HD Smart LED Google TV"
-            elif price >= 30000:
-                name = "OnePlus 43 inches Y Series 4K Smart Android LED TV"
-            else:
-                name = "Xiaomi 32 inches A Series HD Ready Smart Google LED TV"
-                
-        # 6. Watch / Smartwatch mapping
-        elif "watch" in q_lower or "smartwatch" in q_lower:
-            if price >= 40000:
-                name = "Apple Watch Series 9 GPS 45mm Smartwatch"
-            elif price >= 20000:
-                name = "Samsung Galaxy Watch 6 44mm Bluetooth Smartwatch"
-            else:
-                name = "Noise ColorFit Pulse 3 Smartwatch"
-                
-        return name
+        tk.Label(
+            err_card,
+            text="⚠️ Price Comparison Could Not Complete",
+            font=theme.FONT_SUBTITLE,
+            fg=theme.EXPENSE,
+            bg=theme.BG_MAIN
+        ).pack(anchor="w", pady=(0, 6))
+        
+        msg = "We encountered an issue while querying the platforms. Please check your internet connection and try again."
+        if err_details:
+            msg += f"\n\nDetails: {err_details}"
+            
+        tk.Label(
+            err_card,
+            text=msg,
+            font=theme.FONT_BODY,
+            fg=theme.TEXT_PRIMARY,
+            bg=theme.BG_MAIN,
+            justify="left",
+            wraplength=600
+        ).pack(anchor="w", pady=4)
+        
+        tk.Button(
+            err_card,
+            text="🔄 Try Again",
+            font=theme.FONT_BODY_BOLD,
+            bg=theme.ACCENT,
+            fg=theme.TEXT_DARK,
+            bd=0,
+            padx=15,
+            pady=6,
+            cursor="hand2",
+            command=self.run_suggestions_engine
+        ).pack(anchor="w", pady=(10, 0))
+
 
     # ==========================================
     # --- INSIGHTS & EXPORTS PAGE ---
@@ -2055,6 +2091,12 @@ class SmartBudgetTrackerApp(tk.Tk):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load demo data: {str(e)}")
 
+    def create_ai_insights_page(self):
+        return gui_ai_view.create_ai_insights_page(self)
+
+    def refresh_ai_insights(self):
+        gui_ai_view.refresh_ai_insights(self)
+
     def create_landing_page(self):
         page = tk.Frame(self.content_container, bg=theme.BG_MAIN)
         
@@ -2065,11 +2107,19 @@ class SmartBudgetTrackerApp(tk.Tk):
         # App Title
         tk.Label(
             center_frame, 
-            text="Smart Finance Management System", 
-            font=("Segoe UI", 26, "bold"), 
+            text="⚡ FINSIGHT", 
+            font=("Segoe UI", 32, "bold"), 
             fg=theme.ACCENT, 
             bg=theme.BG_MAIN
-        ).pack(pady=(0, 5))
+        ).pack(pady=(0, 2))
+
+        tk.Label(
+            center_frame, 
+            text="Smart Financial Intelligence & Business Management System", 
+            font=("Segoe UI", 12, "bold"), 
+            fg=theme.TEXT_PRIMARY, 
+            bg=theme.BG_MAIN
+        ).pack(pady=(0, 6))
         
         tk.Label(
             center_frame, 
@@ -2093,9 +2143,9 @@ class SmartBudgetTrackerApp(tk.Tk):
         
         desc1 = (
             "• Smart Budget Tracking & Limits\n"
-            "• Category Expense Analysis\n"
-            "• Savings Goals & Subscriptions\n"
-            "• Real-time Price Suggestions\n"
+            "• ⚡ Insight Engine & Spending Forecast\n"
+            "• Smart Spending Alerts & Goal Planner\n"
+            "• Financial Health Profile Score\n"
             "• Automated PDF/Excel Reports"
         )
         tk.Label(card1, text=desc1, font=("Segoe UI", 10), fg=theme.TEXT_MUTED, bg=theme.BG_CARD, justify="left").pack(pady=15, padx=20)
@@ -2202,7 +2252,8 @@ class SmartBudgetTrackerApp(tk.Tk):
                 ("goals", "🎯 Saving Goals"),
                 ("subscriptions", "⏰ Subscriptions"),
                 ("suggestions", "💡 Smart Suggestions"),
-                ("exports", "📈 Insights & Exports")
+                ("exports", "📈 Insights & Exports"),
+                ("ai_insights", "⚡ Insight Engine")
             ]
         else: # Business
             header_lbl = tk.Label(

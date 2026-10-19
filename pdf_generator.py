@@ -90,7 +90,7 @@ class PDFReportGenerator:
         story = []
 
         # --- Header Section ---
-        story.append(Paragraph("Smart Finance Management System", title_style))
+        story.append(Paragraph("FINSIGHT - Financial Intelligence System", title_style))
         report_month = datetime.now().strftime("%B %Y")
         generated_on = datetime.now().strftime("%d %b %Y, %I:%M %p")
         story.append(Paragraph(f"Financial Health Report & Monthly Statement — {report_month} | Generated on {generated_on}", subtitle_style))

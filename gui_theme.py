@@ -175,7 +175,7 @@ class Card(tk.Canvas):
     """
     A custom widget that renders a vector card container with rounded borders.
     """
-    def __init__(self, parent, width, height, bg_color=BG_CARD, border_color=BORDER, radius=12, **kwargs):
+    def __init__(self, parent, width=300, height=200, bg_color=BG_CARD, border_color=BORDER, radius=12, **kwargs):
         super().__init__(parent, width=width, height=height, bg=BG_MAIN, bd=0, highlightthickness=0, **kwargs)
         self.width = width
         self.height = height

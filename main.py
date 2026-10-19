@@ -1,4 +1,9 @@
+import os
 import sys
+
+# Ensure working directory is always the project directory
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 from datetime import datetime, timedelta, date
 from db_manager import DatabaseManager
 from gui_app import SmartBudgetTrackerApp
